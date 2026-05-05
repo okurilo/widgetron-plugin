@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vorovayka Controls</title>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <header class="popup__header">
+        <p class="popup__eyebrow">Vorovayka</p>
+        <h1 class="popup__title">Управление</h1>
+        <p id="status" class="popup__status">Проверяю активную вкладку...</p>
+      </header>
+
+      <section class="panel panel--hero">
+        <div class="status-line">
+          <span id="domainBadge" class="badge">Домен</span>
+          <span id="captureBadge" class="badge badge--muted">Сбор выключен</span>
+        </div>
+        <label class="toggle">
+          <span>
+            <strong>Сбор запросов</strong>
+            <small id="origin">Текущий домен</small>
+          </span>
+          <input id="armedToggle" type="checkbox" />
+        </label>
+        <p class="hint">После переключения вкладка перезагрузится.</p>
+      </section>
+
+      <section class="panel actions">
+        <button id="startButton" type="button">Выбрать элемент</button>
+        <button id="copyButton" type="button">Скопировать захват</button>
+        <button id="viewerButton" type="button" class="button-secondary">Открыть viewer</button>
+        <button id="clearButton" type="button" class="button-ghost">Очистить</button>
+      </section>
+
+      <p id="message" class="message" aria-live="polite"></p>
+    </main>
+    <script type="module" src="./popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vorovayka Receiver</title>
+    <link rel="stylesheet" href="./viewer.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <header class="hero">
+        <p class="eyebrow">Vorovayka</p>
+        <h1>Снимок страницы и сетевого следа</h1>
+        <p class="lead">Viewer показывает последний подтверждённый захват, чтобы быстро сверить DOM, выбранные запросы и сырой JSON без лишней навигации.</p>
+      </header>
+      <section id="state" class="card">
+        <p>Жду новый захват из `latestCapture`...</p>
+      </section>
+      <section class="card">
+        <h2>Сырой JSON</h2>
+        <pre id="json"></pre>
+      </section>
+    </main>
+    <script type="module" src="./viewer.js"></script>
+  </body>
+</html>
