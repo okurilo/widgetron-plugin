@@ -20,6 +20,7 @@ let selectedEl = null;
 let selectionStartedAt = 0;
 let interactionTimestamp = 0;
 let finalizeTimer = null;
+let hintTimer = null;
 let uiRoot = null;
 let highlightBox = null;
 let modal = null;
@@ -29,7 +30,10 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === "START_CAPTURE") {
     if (!captureEnabled) {
       ensureUi();
-      renderHint("Сбор сети на этом домене выключен. Нажмите иконку расширения, чтобы включить его и перезагрузить страницу.");
+      renderHint("Сбор сети на этом домене выключен. Включите его в popup.", {
+        duration: 3200,
+        destroyWhenHidden: true
+      });
       return;
     }
 
@@ -142,7 +146,7 @@ function startSelection() {
   selectedEl = null;
   hoverEl = null;
   selectionStartedAt = Date.now();
-  renderHint("Выберите элемент на странице. Esc — отмена.");
+  renderHint("Выберите элемент на странице. Esc — отмена.", { persistent: true });
   document.addEventListener("pointermove", onPointerMove, true);
   document.addEventListener("click", onClickCapture, true);
   document.addEventListener("keydown", onKeyDown, true);
@@ -188,7 +192,7 @@ function onClickCapture(event) {
   selectedEl = target;
   interactionTimestamp = Date.now();
   stopSelection();
-  renderHint("Собираю DOM и недавние запросы...");
+  renderHint("Собираю DOM и недавние запросы...", { persistent: true });
 
   clearTimeout(finalizeTimer);
   finalizeTimer = window.setTimeout(() => {
@@ -390,33 +394,27 @@ function showSelectionDialog(payload) {
   const actions = document.createElement("div");
   actions.className = "vorovayka-modal__actions";
 
-  const sendButton = document.createElement("button");
-  sendButton.textContent = "Передать";
-  sendButton.addEventListener("click", async () => {
-    const selected = Array.from(list.querySelectorAll("input[type='checkbox']:checked"))
-      .map((input) => payload.networkCandidates[Number(input.dataset.index)])
-      .slice(0, MAX_CANDIDATES)
-      .map(stripTransientFields);
-
-    await chrome.storage.local.set({
-      latestCapture: {
-        createdAt: payload.createdAt,
-        page: payload.page,
-        interaction: payload.interaction,
-        dom: payload.dom,
-        network: selected
-      }
+  const openReceiverButton = document.createElement("button");
+  openReceiverButton.textContent = "Открыть viewer";
+  openReceiverButton.addEventListener("click", async () => {
+    await persistLatestCapture(payload, list);
+    await chrome.runtime.sendMessage({ type: "OPEN_RECEIVER" });
+    renderHint("Viewer открыт.", {
+      duration: 2200,
+      destroyWhenHidden: true
     });
-    await chrome.runtime.sendMessage({ type: "SCHEDULE_CAPTURE_EXPIRY" });
-
-    renderHint("Capture сохранён в chrome.storage.local как latestCapture");
     closeModal();
   });
 
-  const openReceiverButton = document.createElement("button");
-  openReceiverButton.textContent = "Открыть соседнюю вкладку";
-  openReceiverButton.addEventListener("click", async () => {
-    await chrome.runtime.sendMessage({ type: "OPEN_RECEIVER" });
+  const saveButton = document.createElement("button");
+  saveButton.textContent = "Сохранить capture";
+  saveButton.addEventListener("click", async () => {
+    await persistLatestCapture(payload, list);
+    renderHint("Захват сохранён.", {
+      duration: 2200,
+      destroyWhenHidden: true
+    });
+    closeModal();
   });
 
   const cancelButton = document.createElement("button");
@@ -426,7 +424,7 @@ function showSelectionDialog(payload) {
     destroyUi();
   });
 
-  actions.append(sendButton, openReceiverButton, cancelButton);
+  actions.append(openReceiverButton, saveButton, cancelButton);
   modal.append(heading, summary, list, actions);
   uiRoot.appendChild(modal);
 }
@@ -442,6 +440,24 @@ function stripTransientFields(record) {
     requestHeaders: record.requestHeaders,
     responseHeaders: record.responseHeaders
   };
+}
+
+async function persistLatestCapture(payload, list) {
+  const selected = Array.from(list.querySelectorAll("input[type='checkbox']:checked"))
+    .map((input) => payload.networkCandidates[Number(input.dataset.index)])
+    .slice(0, MAX_CANDIDATES)
+    .map(stripTransientFields);
+
+  await chrome.storage.local.set({
+    latestCapture: {
+      createdAt: payload.createdAt,
+      page: payload.page,
+      interaction: payload.interaction,
+      dom: payload.dom,
+      network: selected
+    }
+  });
+  await chrome.runtime.sendMessage({ type: "SCHEDULE_CAPTURE_EXPIRY" });
 }
 
 function ensureUi() {
@@ -542,7 +558,7 @@ function ensureUi() {
         color: #0f172a;
       }
     </style>
-    <div class="vorovayka-hint"></div>
+    <div class="vorovayka-hint" hidden></div>
     <div class="vorovayka-highlight" hidden></div>
   `;
 
@@ -551,6 +567,8 @@ function ensureUi() {
 }
 
 function destroyUi() {
+  clearTimeout(hintTimer);
+  hintTimer = null;
   if (uiRoot?.isConnected) {
     uiRoot.remove();
   }
@@ -559,11 +577,35 @@ function destroyUi() {
   modal = null;
 }
 
-function renderHint(text) {
+function renderHint(text, options = {}) {
   ensureUi();
   const hint = uiRoot.querySelector(".vorovayka-hint");
   if (hint) {
+    clearTimeout(hintTimer);
+    hintTimer = null;
+    hint.hidden = false;
     hint.textContent = text;
+
+    if (!options.persistent) {
+      hintTimer = window.setTimeout(() => {
+        hideHint();
+        if (options.destroyWhenHidden && !selectionActive && !modal) {
+          destroyUi();
+        }
+      }, options.duration ?? 2400);
+    }
+  }
+}
+
+function hideHint() {
+  if (!uiRoot?.isConnected) {
+    return;
+  }
+
+  const hint = uiRoot.querySelector(".vorovayka-hint");
+  if (hint) {
+    hint.hidden = true;
+    hint.textContent = "";
   }
 }
 
