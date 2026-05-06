@@ -5,7 +5,11 @@
 - выбора DOM-узла на странице
 - сбора ограниченного DOM snapshot
 - захвата последних релевантных `fetch`/`XHR`
-- выбора до 5 запросов пользователем
+- выбора до 8 запросов пользователем
+- сборки эвристического API-рецепта выбранного элемента
+- изолированного HTML-превью выбранного элемента во viewer
+- карты происхождения видимых значений: DOM fact → API response path → render evidence
+- sequence-диаграммы API-зависимостей, если значение из ответа одного захваченного запроса использовано в URL/body/header следующего
 - передачи данных через `chrome.storage.local.latestCapture`
 - явного включения capture только на выбранном домене
 - popup-меню для включения/выключения capture и копирования результата
@@ -24,16 +28,23 @@
 
 ## Что входит в MVP
 
-- DOM snapshot: `outerHTML`, `innerText`, `rect`, `dataset`, `aria`, `role`, ограниченные computed styles
+- DOM snapshot: `outerHTML`, `previewHTML`, `innerText`, `rect`, `selector`, `ancestorChain`, `dataset`, `aria`, `role`, ограниченные computed styles
 - Network capture: ring buffer `N=30`
 - Фильтрация: убираются `OPTIONS`, analytics/telemetry и статические ресурсы
-- Ограничения: HTML до `50KB`, response body до `100KB`, не более `5` запросов
+- Request context: best-effort `requestBody` для `fetch(init.body)` и `XHR.send(body)` с редактированием очевидных секретов
+- Element recipe / clone spec: упорядоченная API-последовательность, shape JSON-ответа, `domFacts`, `responseFacts`, `bindings`, `apiDependencies`, `renderEvidence` и найденные поля, совпавшие с видимыми данными выбранного элемента
+- API dependencies: viewer показывает sequence только при доказанном совпадении “response value из раннего API → request URL/body/header более позднего API”; если таких связей нет, diagram скрыта
+- Provenance matching: нормализация текста, чисел, валют, процентов и дат; multi-field context matching внутри одного JSON-объекта; лёгкий DOM mutation trace для evidence “ответ пришёл → DOM изменился”
+- Viewer preview: `previewHTML` рендерится в sandboxed `iframe` с CSP `default-src 'none'`, без внешних ресурсов
+- Frontend evidence: best-effort call stack места вызова `fetch`/`XHR` сохраняется локально и показывается во viewer
+- Progress UX: долгий анализ показывает этапы и прогресс при выборе элемента и при сохранении/открытии viewer
+- Ограничения: HTML до `50KB`, preview HTML до `50KB`, request body до `20KB`, response body до `100KB`, call stack до `8KB`, не более `8` запросов
 - Безопасность: capture включается только на armed-доменах, может быть выключен из popup, channel page→content изолирован случайным именем события, чувствительные заголовки и очевидные токены редактируются, `latestCapture` очищается после чтения и автоудаляется по TTL
 - UX: открытие viewer автоматически сохраняет текущий capture, без двойного действия `сохранить` → `открыть`
 
 ## Что сознательно не покрыто
 
-- сложная корреляция DOM ↔ API
+- точная причинная корреляция DOM ↔ API; recipe остаётся эвристикой по времени запроса, совпадениям DOM/JSON-фактов, контексту соседних полей и DOM mutation evidence
 - DevTools/CDP/WebSocket/GraphQL
 - устойчивость ко всем типам навигации и edge-case SPA
 - production-grade защита от всех видов секретов внутри произвольных text response body

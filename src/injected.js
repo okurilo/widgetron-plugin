@@ -1,7 +1,9 @@
 (() => {
   const EVENT_NAME = document.currentScript?.dataset.eventName || "__VOROVAYKA_NETWORK_EVENT__";
+  const MAX_REQUEST_CHARS = 20 * 1024;
   const MAX_RESPONSE_CHARS = 100 * 1024;
   const MAX_BUFFERED_BODY_BYTES = 100 * 1024;
+  const MAX_STACK_CHARS = 8 * 1024;
   const FETCH_WRAPPER_MARK = "__vorovaykaFetchWrapper__";
   const SENSITIVE_KEY_PATTERN = /(token|secret|password|authorization|cookie|session|csrf|xsrf|api[-_]?key|jwt)/i;
   const encoder = new TextEncoder();
@@ -24,6 +26,8 @@
       const method = String(init?.method || request?.method || "GET").toUpperCase();
       const timestamp = Date.now();
       const requestHeaders = sanitizeHeaders(extractHeaders(init?.headers || request?.headers));
+      const requestBody = serializeRequestBody(init?.body);
+      const initiatorStack = captureStack();
 
       const response = await upstreamFetch.apply(this, arguments);
 
@@ -32,7 +36,9 @@
           url,
           method,
           timestamp,
-          requestHeaders
+          requestHeaders,
+          requestBody,
+          initiatorStack
         });
       });
 
@@ -69,6 +75,8 @@
   XMLHttpRequest.prototype.send = function patchedSend() {
     if (this.__vorovaykaMeta) {
       this.__vorovaykaMeta.timestamp = Date.now();
+      this.__vorovaykaMeta.requestBody = serializeRequestBody(arguments[0]);
+      this.__vorovaykaMeta.initiatorStack = captureStack();
       this.addEventListener("loadend", () => {
         const meta = this.__vorovaykaMeta || {};
         emit(buildXhrPayload(this, meta));
@@ -120,6 +128,8 @@
       status: response.status,
       timestamp: meta.timestamp,
       contentType,
+      requestBody: meta.requestBody,
+      initiatorStack: meta.initiatorStack,
       responseBody,
       bodyTooLarge,
       requestHeaders: meta.requestHeaders,
@@ -140,6 +150,8 @@
       status: xhr.status,
       timestamp: meta.timestamp || Date.now(),
       contentType,
+      requestBody: meta.requestBody || "",
+      initiatorStack: meta.initiatorStack || "",
       responseBody: isAllowedContentType(contentType)
         ? truncate(sanitizeResponseBody(responseText, contentType), MAX_RESPONSE_CHARS)
         : "",
@@ -197,6 +209,79 @@
         acc[key] = headerValue;
         return acc;
       }, {});
+  }
+
+  function captureStack() {
+    try {
+      const stack = new Error().stack || "";
+      return truncate(redactSensitiveText(stack), MAX_STACK_CHARS);
+    } catch {
+      return "";
+    }
+  }
+
+  function serializeRequestBody(body) {
+    if (body == null) {
+      return "";
+    }
+
+    try {
+      if (typeof body === "string") {
+        return truncate(sanitizeBodyText(body), MAX_REQUEST_CHARS);
+      }
+
+      if (body instanceof URLSearchParams) {
+        return truncate(JSON.stringify(redactSensitiveFields(Object.fromEntries(body.entries()))), MAX_REQUEST_CHARS);
+      }
+
+      if (body instanceof FormData) {
+        return truncate(JSON.stringify(redactFormData(body)), MAX_REQUEST_CHARS);
+      }
+
+      if (body instanceof Blob) {
+        return `[Blob ${body.type || "unknown"} ${body.size} bytes]`;
+      }
+
+      if (body instanceof ArrayBuffer) {
+        return `[ArrayBuffer ${body.byteLength} bytes]`;
+      }
+
+      if (ArrayBuffer.isView(body)) {
+        return `[${body.constructor?.name || "TypedArray"} ${body.byteLength} bytes]`;
+      }
+
+      return truncate(redactSensitiveText(String(body)), MAX_REQUEST_CHARS);
+    } catch {
+      return "";
+    }
+  }
+
+  function sanitizeBodyText(text) {
+    try {
+      return JSON.stringify(redactSensitiveFields(JSON.parse(text)));
+    } catch {
+      return redactSensitiveText(text);
+    }
+  }
+
+  function redactFormData(formData) {
+    const safeEntries = {};
+
+    for (const [key, value] of formData.entries()) {
+      if (SENSITIVE_KEY_PATTERN.test(key)) {
+        safeEntries[key] = "[REDACTED]";
+        continue;
+      }
+
+      if (typeof File !== "undefined" && value instanceof File) {
+        safeEntries[key] = `[File ${value.name || "unnamed"} ${value.type || "unknown"} ${value.size} bytes]`;
+        continue;
+      }
+
+      safeEntries[key] = String(value);
+    }
+
+    return redactSensitiveFields(safeEntries);
   }
 
   function sanitizeHeaders(headers) {
