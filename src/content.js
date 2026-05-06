@@ -533,6 +533,7 @@ function captureDomSnapshot(target, facts = null) {
 function extractDomFacts(target) {
   const facts = [];
   const seen = new Set();
+  const selectedText = truncateText(target.innerText || target.textContent || "", 900);
   const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       const text = normalizeText(node.textContent || "");
@@ -558,6 +559,7 @@ function extractDomFacts(target) {
     const context = {
       elementText: truncateText(element.innerText || element.textContent || "", 500),
       rowText: truncateText(contextElement?.innerText || contextElement?.textContent || "", 700),
+      selectedText,
       nearbyLabel: findNearbyLabel(element),
       parentSelector: contextElement ? buildCssSelector(contextElement) : selector
     };
@@ -1070,6 +1072,11 @@ function scoreRequestAgainstFacts(record, domFacts) {
     }
 
     if (["number", "currency", "percent"].includes(fact.kind) && numericKeys.has(fact.normalizedValue)) {
+      count += 1;
+      return;
+    }
+
+    if (fact.kind === "duration" && hasComparableDurationNumber(fact, responseFacts)) {
       count += 1;
     }
   });
@@ -2091,6 +2098,42 @@ function buildProvenanceBindings(domFacts, responseFacts, requests, mutationTrac
   return unique;
 }
 
+function hasComparableDurationNumber(domFact, responseFacts) {
+  const durationNumber = String(domFact.normalizedValue || "").split(":")[0];
+  if (!durationNumber) {
+    return false;
+  }
+
+  return responseFacts.some((fact) => (
+    ["number", "currency", "percent"].includes(fact.kind) &&
+    factComparableNumbers(fact).has(durationNumber)
+  ));
+}
+
+function factComparableNumbers(fact) {
+  const values = new Set();
+  if (fact?.normalizedValue) {
+    values.add(String(fact.normalizedValue));
+  }
+
+  const paddedDecimal = normalizePaddedDecimalNumber(fact?.value);
+  if (paddedDecimal) {
+    values.add(paddedDecimal);
+  }
+
+  return values;
+}
+
+function normalizePaddedDecimalNumber(value) {
+  const text = String(value ?? "").trim().replace(/\s+/g, "");
+  const match = text.match(/^([-+]?\d+)[,.](\d{3,4})$/);
+  if (!match || !/^0+$/.test(match[2])) {
+    return "";
+  }
+
+  return match[1].replace(/^\+/, "");
+}
+
 function scoreFactMatch(domFact, responseFact) {
   if (!domFact.normalizedValue || !responseFact.normalizedValue) {
     return null;
@@ -2114,7 +2157,7 @@ function scoreFactMatch(domFact, responseFact) {
   if (
     domFact.kind === "duration" &&
     ["number", "currency", "percent"].includes(responseFact.kind) &&
-    domFact.normalizedValue.split(":")[0] === responseFact.normalizedValue
+    factComparableNumbers(responseFact).has(domFact.normalizedValue.split(":")[0])
   ) {
     return {
       type: "duration-number",
@@ -2166,7 +2209,8 @@ function scoreContextMatch(domFact, responseFact) {
   const contextText = normalizeText([
     domFact.context?.nearbyLabel,
     domFact.context?.rowText,
-    domFact.context?.elementText
+    domFact.context?.elementText,
+    domFact.context?.selectedText
   ].filter(Boolean).join(" "));
   const siblingValues = Object.values(responseFact.siblingFields || {})
     .map((value) => normalizeFactValue(value, classifyFact(value)))
@@ -2202,7 +2246,8 @@ function scoreSemanticContext(domFact, responseFact) {
     domFact.value,
     domFact.context?.nearbyLabel,
     domFact.context?.rowText,
-    domFact.context?.elementText
+    domFact.context?.elementText,
+    domFact.context?.selectedText
   ].filter(Boolean).join(" ");
   const responseText = [
     responseFact.url,

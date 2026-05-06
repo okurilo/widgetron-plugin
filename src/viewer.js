@@ -179,7 +179,8 @@ function renderMinimalRecipeTable(recipe) {
       <div class="minimal-row minimal-row--head">
         <span>Данные</span>
         <span>JSON path</span>
-        <span>Пример</span>
+        <span>В элементе</span>
+        <span>В ответе</span>
         <span>Score</span>
       </div>
     `;
@@ -193,7 +194,8 @@ function renderMinimalRecipeTable(recipe) {
           <small>${escapeHtml(field.type)}</small>
         </span>
         <code>${escapeHtml(field.jsonPath || "—")}</code>
-        <span>${escapeHtml(field.valueExample || field.displayValue || "—")}</span>
+        <span>${escapeHtml(field.displayValue || "—")}</span>
+        <span>${escapeHtml(field.responseValue || "—")}</span>
         <strong>${escapeHtml(formatConfidenceScore(field.confidence))}</strong>
       `;
       rows.appendChild(row);
@@ -207,11 +209,13 @@ function renderMinimalRecipeTable(recipe) {
   return section;
 }
 
-function buildMinimalRecipeGroups(recipe) {
+function buildMinimalRecipeGroups(recipe, options = {}) {
   const groups = new Map();
   const usedNames = new Map();
 
-  getExportBindings(recipe).slice(0, 40).forEach((binding, index) => {
+  getExportBindings(recipe, {
+    includeDerived: options.includeDerived !== false
+  }).slice(0, 40).forEach((binding, index) => {
     const method = binding.method || "GET";
     const url = binding.url || "";
     const key = `${method} ${url}`;
@@ -230,7 +234,7 @@ function buildMinimalRecipeGroups(recipe) {
       type: inferExportFieldType(binding),
       jsonPath: binding.responsePath || binding.path || "",
       displayValue: binding.domValue || binding.value || "",
-      valueExample: binding.responseValue || binding.value || "",
+      responseValue: binding.responseValue ?? binding.value ?? "",
       confidence: binding.confidence || null
     });
     groups.set(key, group);
@@ -295,12 +299,12 @@ function renderExportPanel(capture, recipe) {
   const bindings = getExportBindings(recipe).slice(0, 40);
   section.innerHTML = `
     <h2 class="section-title">Выгрузка JSON</h2>
-    <p class="section-copy">В JSON попадёт только выбранный элемент, его верстка, связанные API и JSON-path нужных данных.</p>
+    <p class="section-copy">В JSON попадёт только выбранный элемент, его HTML без CSS, связанные API и JSON-path нужных данных.</p>
   `;
 
   const minimalNote = document.createElement("div");
   minimalNote.className = "export-note";
-  minimalNote.textContent = "Выберите только те поля, которые нужны для рендера. Структура ответа, сырые ответы, DOM-контекст и debug в эту выгрузку не попадают.";
+  minimalNote.textContent = "Выберите только те поля, которые нужны для рендера. CSS, структура ответа, сырые ответы, DOM-контекст и debug в эту выгрузку не попадают.";
 
   const fields = document.createElement("div");
   fields.className = "export-fields";
@@ -400,17 +404,44 @@ function buildExportPayload(capture, recipe, options) {
 
 function buildElementOnlyExport(capture, recipe) {
   return {
-    selector: recipe.element?.selector || capture.dom?.selector || "",
     tagName: recipe.element?.tagName || capture.dom?.tagName || "",
     text: recipe.element?.textPreview || capture.dom?.innerText || "",
-    html: capture.dom?.previewHTML || capture.dom?.outerHTML || ""
+    html: stripCssFromHtml(capture.dom?.outerHTML || capture.dom?.previewHTML || "")
   };
+}
+
+function stripCssFromHtml(html) {
+  const text = String(html || "").trim();
+  if (!text) {
+    return "";
+  }
+
+  try {
+    const template = document.createElement("template");
+    template.innerHTML = text;
+    template.content.querySelectorAll("style, link[rel~='stylesheet']").forEach((node) => {
+      node.remove();
+    });
+    template.content.querySelectorAll("*").forEach((node) => {
+      node.removeAttribute("style");
+      node.removeAttribute("class");
+      node.removeAttribute("part");
+    });
+    return template.innerHTML;
+  } catch {
+    return text
+      .replace(/<style\b[\s\S]*?<\/style>/gi, "")
+      .replace(/<link\b[^>]*rel=["']?stylesheet["']?[^>]*>/gi, "")
+      .replace(/\s(?:style|class|part)=["'][^"']*["']/gi, "");
+  }
 }
 
 function buildElementOnlyApiExport(recipe, bindings) {
   const groups = buildMinimalRecipeGroups({
     ...recipe,
     bindings
+  }, {
+    includeDerived: false
   });
   const dependencies = getApiDependencies(recipe);
 
@@ -437,7 +468,8 @@ function buildElementOnlyApiExport(recipe, bindings) {
         name: field.name,
         type: field.type,
         jsonPath: field.jsonPath,
-        valueExample: field.valueExample || field.displayValue || ""
+        displayValue: field.displayValue || "",
+        responseValue: field.responseValue || ""
       }))
     };
 
@@ -458,8 +490,235 @@ function findRequestIdForApiGroup(recipe, group) {
   return step?.requestId || "";
 }
 
-function getExportBindings(recipe) {
-  return (recipe.bindings || recipe.dataRequirements || []);
+function getExportBindings(recipe, options = {}) {
+  const baseBindings = (recipe.bindings || recipe.dataRequirements || []);
+  if (options.includeDerived === false) {
+    return baseBindings;
+  }
+
+  return mergeDerivedPrimaryValueBindings(recipe, baseBindings);
+}
+
+function mergeDerivedPrimaryValueBindings(recipe, baseBindings) {
+  const derived = deriveMissingPrimaryValueBindings(recipe, baseBindings);
+  if (derived.length === 0) {
+    return baseBindings;
+  }
+
+  const seen = new Set();
+  return [...baseBindings, ...derived].filter((binding) => {
+    const key = [
+      binding.requestId || "",
+      binding.responsePath || binding.path || "",
+      normalizeViewerText(binding.domValue || binding.value || ""),
+      normalizeViewerText(binding.responseValue || "")
+    ].join("::");
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function deriveMissingPrimaryValueBindings(recipe, baseBindings) {
+  const domFacts = (recipe.domFacts || []).filter(isPrimaryVisibleFact);
+  const responseFacts = recipe.responseFacts || [];
+  if (domFacts.length === 0 || responseFacts.length === 0) {
+    return [];
+  }
+
+  const existing = new Set(baseBindings.map((binding) => [
+    binding.requestId || "",
+    binding.responsePath || binding.path || "",
+    normalizeViewerText(binding.domValue || binding.value || "")
+  ].join("::")));
+  const elementContext = normalizeViewerText([
+    recipe.element?.textPreview,
+    ...(recipe.element?.textFragments || [])
+  ].filter(Boolean).join(" "));
+  const candidates = [];
+
+  domFacts.forEach((domFact) => {
+    responseFacts.forEach((responseFact) => {
+      const match = scorePrimaryValueFallback(domFact, responseFact, elementContext);
+      if (!match) {
+        return;
+      }
+
+      const key = [
+        responseFact.requestId || "",
+        responseFact.path || "",
+        normalizeViewerText(domFact.value || "")
+      ].join("::");
+      if (existing.has(key)) {
+        return;
+      }
+
+      candidates.push({
+        id: `derived-${domFact.id || "dom"}-${responseFact.id || "response"}`,
+        domFactId: domFact.id || "",
+        responseFactId: responseFact.id || "",
+        requestId: responseFact.requestId || "",
+        step: responseFact.step || null,
+        method: responseFact.method || "GET",
+        url: responseFact.url || "",
+        responsePath: responseFact.path || "",
+        responseKey: responseFact.key || "",
+        parentObjectPath: responseFact.parentObjectPath || "",
+        domValue: domFact.value || "",
+        responseValue: responseFact.value || "",
+        kind: domFact.kind || responseFact.kind || "text",
+        matchType: match.type,
+        confidence: match.confidence,
+        reasons: match.reasons,
+        dom: {
+          selector: domFact.selector || "",
+          context: domFact.context || {},
+          rect: domFact.rect || null
+        },
+        response: {
+          siblingFields: responseFact.siblingFields || {}
+        },
+        evidence: []
+      });
+    });
+  });
+
+  return candidates
+    .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0) || Number(a.step || 0) - Number(b.step || 0))
+    .slice(0, 12);
+}
+
+function isPrimaryVisibleFact(fact) {
+  return ["duration", "number", "currency", "percent"].includes(fact?.kind) && Boolean(fact?.normalizedValue);
+}
+
+function scorePrimaryValueFallback(domFact, responseFact, elementContext) {
+  const compatibility = getPrimaryValueCompatibility(domFact, responseFact);
+  if (!compatibility) {
+    return null;
+  }
+
+  const contextText = normalizeViewerText([
+    elementContext,
+    domFact.context?.nearbyLabel,
+    domFact.context?.rowText,
+    domFact.context?.elementText,
+    domFact.context?.selectedText
+  ].filter(Boolean).join(" "));
+  const siblingValues = Object.values(responseFact.siblingFields || {})
+    .map(normalizeViewerText)
+    .filter((value) => value.length >= 3 && value !== normalizeViewerText(responseFact.value || ""));
+  const hasSiblingContext = siblingValues.some((value) => contextText.includes(value));
+  const hasSemanticContext = hasSharedFallbackSemantic(contextText, responseFact);
+
+  if (compatibility.weak && !hasSiblingContext && !hasSemanticContext) {
+    return null;
+  }
+
+  const reasons = [...compatibility.reasons, "derived-visible-primary-value"];
+  let confidence = compatibility.score;
+  if (hasSiblingContext) {
+    confidence += 0.18;
+    reasons.push("same-object-context");
+  }
+  if (hasSemanticContext) {
+    confidence += 0.12;
+    reasons.push("semantic-context-match");
+  }
+
+  confidence = Math.min(0.92, Math.round(confidence * 100) / 100);
+  if (confidence < 0.42) {
+    return null;
+  }
+
+  return {
+    type: compatibility.type,
+    confidence,
+    reasons
+  };
+}
+
+function getPrimaryValueCompatibility(domFact, responseFact) {
+  if (!domFact?.normalizedValue || !responseFact?.normalizedValue) {
+    return null;
+  }
+
+  const numericKinds = ["number", "currency", "percent"];
+  const sameNumericKind = numericKinds.includes(domFact.kind) && numericKinds.includes(responseFact.kind);
+  if ((domFact.kind === responseFact.kind || sameNumericKind) && domFact.normalizedValue === responseFact.normalizedValue) {
+    return {
+      type: "normalized-value",
+      score: domFact.kind === "duration" ? 0.7 : 0.56,
+      reasons: ["normalized-value-match"],
+      weak: isWeakViewerNumber(domFact.normalizedValue, domFact.kind)
+    };
+  }
+
+  if (domFact.kind === "duration" && numericKinds.includes(responseFact.kind)) {
+    const durationNumber = String(domFact.normalizedValue).split(":")[0];
+    if (getViewerComparableNumbers(responseFact).has(durationNumber)) {
+      return {
+        type: "duration-number",
+        score: 0.32,
+        reasons: ["duration-number-match", "weak-numeric-match"],
+        weak: true
+      };
+    }
+  }
+
+  return null;
+}
+
+function getViewerComparableNumbers(fact) {
+  const values = new Set();
+  if (fact?.normalizedValue) {
+    values.add(String(fact.normalizedValue));
+  }
+
+  const paddedDecimal = normalizeViewerPaddedDecimal(fact?.value);
+  if (paddedDecimal) {
+    values.add(paddedDecimal);
+  }
+
+  return values;
+}
+
+function normalizeViewerPaddedDecimal(value) {
+  const text = String(value ?? "").trim().replace(/\s+/g, "");
+  const match = text.match(/^([-+]?\d+)[,.](\d{3,4})$/);
+  if (!match || !/^0+$/.test(match[2])) {
+    return "";
+  }
+
+  return match[1].replace(/^\+/, "");
+}
+
+function isWeakViewerNumber(value, kind) {
+  if (!["number", "currency", "percent"].includes(kind)) {
+    return false;
+  }
+
+  const number = Number(value);
+  return Number.isFinite(number) && Math.abs(number) < 10;
+}
+
+function hasSharedFallbackSemantic(contextText, responseFact) {
+  const responseText = normalizeViewerText([
+    responseFact.url,
+    responseFact.path,
+    responseFact.key,
+    responseFact.parentObjectPath,
+    ...Object.keys(responseFact.siblingFields || {}),
+    ...Object.values(responseFact.siblingFields || {})
+  ].filter(Boolean).join(" "));
+
+  return hasAbsenceSemantic(contextText) && hasAbsenceSemantic(responseText);
+}
+
+function hasAbsenceSemantic(text) {
+  return /(absen|absence|vacation|leave|timeoff|holiday|отпуск|отпуска|отгул|отгулы|больнич|дней|день)/i.test(text);
 }
 
 function getSelectedExportBindings(recipe, selectedFieldIds) {
@@ -512,7 +771,7 @@ function inferExportFieldType(binding) {
 function renderFieldsTab(recipe) {
   const section = document.createElement("section");
   section.className = "grid";
-  const bindings = recipe.bindings || recipe.dataRequirements || [];
+  const bindings = getExportBindings(recipe);
 
   section.innerHTML = `
     <h2 class="section-title">Поля виджета</h2>
@@ -567,7 +826,7 @@ function renderRecipe(recipe) {
   const section = document.createElement("section");
   section.className = "grid";
 
-  const bindings = recipe.bindings || recipe.dataRequirements || [];
+  const bindings = getExportBindings(recipe);
   const matchesCount = bindings.length;
   const steps = recipe.apiSequence || [];
   const apiDependencies = getApiDependencies(recipe);
@@ -635,7 +894,7 @@ function renderBindingExplorer(recipe) {
   const panel = document.createElement("div");
   panel.className = "binding-detail";
 
-  const bindings = (recipe.bindings || recipe.dataRequirements || []).slice(0, 40);
+  const bindings = getExportBindings(recipe).slice(0, 40);
   bindings.forEach((binding, index) => {
     const button = document.createElement("button");
     button.type = "button";
@@ -742,9 +1001,9 @@ function renderAlternatives(alternatives) {
 }
 
 function getBindingAlternatives(recipe, binding) {
-  return (recipe.bindings || recipe.dataRequirements || [])
+  return getExportBindings(recipe)
     .filter((item) => (
-      item !== binding &&
+      getBindingExportId(item, 0) !== getBindingExportId(binding, 0) &&
       item.domFactId === binding.domFactId &&
       (item.requestId !== binding.requestId || item.responsePath !== binding.responsePath)
     ))
@@ -1109,6 +1368,15 @@ function shortEndpoint(binding) {
   return endpoint.length <= 96 ? endpoint : `${endpoint.slice(0, 93)}...`;
 }
 
+function normalizeViewerText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replaceAll("ё", "е")
+    .replace(/[^\p{L}\p{N}%.,:+-]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function formatReason(reason) {
   const labels = {
     "exact-text-match": "точный текст",
@@ -1128,7 +1396,8 @@ function formatReason(reason) {
     "request-body-text": "совпало с текстом body",
     "request-header": "совпало с request header",
     "request-key-context": "совпал контекст ключа запроса",
-    "semantic-request-context": "семантика запроса совпала"
+    "semantic-request-context": "семантика запроса совпала",
+    "derived-visible-primary-value": "восстановлено из видимого значения"
   };
 
   return labels[reason] || reason;
