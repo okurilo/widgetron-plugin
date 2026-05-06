@@ -661,6 +661,8 @@ function renderApiTab(recipe) {
     section.appendChild(renderSequenceDiagram(apiDependencies));
   }
 
+  section.appendChild(renderApiCopySelector(steps));
+
   const sequence = document.createElement("div");
   sequence.className = "timeline";
   steps.forEach((step) => {
@@ -670,6 +672,53 @@ function renderApiTab(recipe) {
   return section;
 }
 
+
+
+function renderApiCopySelector(steps) {
+  const surface = document.createElement("div");
+  surface.className = "surface api-copy-selector";
+  surface.innerHTML = `
+    <strong>Копирование API</strong>
+    <p class="section-copy">Отметьте нужные ручки и скопируйте только их.</p>
+  `;
+
+  const list = document.createElement("div");
+  list.className = "api-copy-list";
+
+  steps.forEach((step, index) => {
+    const row = document.createElement("label");
+    row.className = "api-copy-row";
+    row.innerHTML = `
+      <input type="checkbox" class="api-copy-checkbox" value="${escapeHtml(step.requestId || String(index))}" checked />
+      <span><strong>${escapeHtml(step.method || "GET")} ${escapeHtml(step.url || "")}</strong><small>Status ${escapeHtml(String(step.status || 0))}</small></span>
+    `;
+    list.appendChild(row);
+  });
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "copy-chip";
+  button.textContent = "Скопировать выбранные API";
+  button.addEventListener("click", async () => {
+    const selected = new Set(
+      Array.from(list.querySelectorAll('.api-copy-checkbox:checked')).map((item) => item.value)
+    );
+    const api = steps
+      .filter((step, index) => selected.has(step.requestId || String(index)))
+      .map((step) => ({
+        method: step.method || "GET",
+        url: step.url || "",
+        status: step.status || 0,
+        requestBody: step.request?.body || "",
+        responseBody: step.response?.bodyPreview || ""
+      }));
+
+    await navigator.clipboard.writeText(JSON.stringify({ api }, null, 2));
+  });
+
+  surface.append(list, button);
+  return surface;
+}
 function renderRecipe(recipe) {
   const section = document.createElement("section");
   section.className = "grid";

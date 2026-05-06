@@ -832,3 +832,29 @@ pre {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+
+.api-copy-selector {
+  display: grid;
+  gap: 10px;
+}
+
+.api-copy-list {
+  display: grid;
+  gap: 8px;
+}
+
+.api-copy-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: start;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.api-copy-row small {
+  display: block;
+  color: var(--muted);
+}
