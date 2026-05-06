@@ -4,6 +4,8 @@ const rawJsonPanelEl = document.querySelector(".debug-panel");
 const LATEST_CAPTURE_STORAGE_KEY = "latestCapture";
 const COPYABLE_CAPTURE_STORAGE_KEY = "copyableCapture";
 
+let currentCapture = null;
+
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local" || !changes[LATEST_CAPTURE_STORAGE_KEY]?.newValue) {
     return;
@@ -29,6 +31,7 @@ async function init() {
 }
 
 function renderCapture(capture) {
+  currentCapture = capture;
   stateEl.innerHTML = "";
 
   const wrapper = document.createElement("div");
@@ -71,6 +74,101 @@ function renderCapture(capture) {
   jsonEl.textContent = JSON.stringify(capture, null, 2);
 }
 
+
+
+function buildDomTreeSnapshot(node, options = {}) {
+  if (!(node instanceof Element)) {
+    return null;
+  }
+
+  const includeStyles = Boolean(options.includeStyles);
+  const item = {
+    tag: node.tagName.toLowerCase()
+  };
+
+  const attrs = {};
+  Array.from(node.attributes || []).forEach((attribute) => {
+    const name = attribute.name.toLowerCase();
+    if (name === "class" || name === "style") {
+      return;
+    }
+    attrs[name] = attribute.value;
+  });
+  if (Object.keys(attrs).length > 0) {
+    item.attrs = attrs;
+  }
+
+  if (includeStyles && node.getAttribute("style")) {
+    item.style = node.getAttribute("style");
+  }
+
+  const children = [];
+  node.childNodes.forEach((child) => {
+    if (child.nodeType === Node.ELEMENT_NODE) {
+      const nested = buildDomTreeSnapshot(child, options);
+      if (nested) {
+        children.push(nested);
+      }
+      return;
+    }
+
+    if (child.nodeType === Node.TEXT_NODE) {
+      const text = String(child.textContent || "").replace(/\s+/g, " ").trim();
+      if (text) {
+        children.push({ text });
+      }
+    }
+  });
+
+  if (children.length > 0) {
+    item.children = children;
+  }
+
+  return item;
+}
+
+function buildCopyPayload(capture, mode = "all") {
+  const domElement = capture?.dom?.outerHTML ? new DOMParser().parseFromString(capture.dom.outerHTML, "text/html").body.firstElementChild : null;
+  const domStructure = domElement ? buildDomTreeSnapshot(domElement, { includeStyles: false }) : null;
+  const domWithStyles = domElement ? buildDomTreeSnapshot(domElement, { includeStyles: true }) : null;
+  const apiList = (capture?.network || []).map((request) => ({
+    method: request.method || "GET",
+    url: request.url || "",
+    status: request.status || 0,
+    requestBody: request.requestBody || "",
+    responseBody: request.responseBody || ""
+  }));
+
+  if (mode === "api") {
+    return { api: apiList };
+  }
+  if (mode === "dom") {
+    return { dom: domStructure };
+  }
+  if (mode === "domWithStyles") {
+    return { domWithStyles };
+  }
+
+  return {
+    api: apiList,
+    dom: domStructure
+  };
+}
+
+function createCopyButton(label, mode) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "copy-chip";
+  button.textContent = label;
+  button.addEventListener("click", async () => {
+    if (!currentCapture) {
+      return;
+    }
+    const payload = buildCopyPayload(currentCapture, mode);
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+  });
+  return button;
+}
 function renderOverview(capture, recipe) {
   const section = document.createElement("section");
   section.className = "overview";
@@ -89,8 +187,17 @@ function renderOverview(capture, recipe) {
     preview.appendChild(empty);
   }
 
+  const toolbar = document.createElement("div");
+  toolbar.className = "copy-toolbar";
+  toolbar.append(
+    createCopyButton("Скопировать всё", "all"),
+    createCopyButton("Скопировать API", "api"),
+    createCopyButton("Скопировать DOM", "dom"),
+    createCopyButton("DOM как есть", "domWithStyles")
+  );
+
   top.append(preview, renderMeta(capture, recipe));
-  section.append(top, renderMinimalRecipeTable(recipe));
+  section.append(toolbar, top, renderMinimalRecipeTable(recipe));
   return section;
 }
 
