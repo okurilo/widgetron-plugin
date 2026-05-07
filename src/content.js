@@ -3,6 +3,7 @@ const ARMED_ORIGINS_KEY = "armedOrigins";
 const LATEST_CAPTURE_STORAGE_KEY = "latestCapture";
 const COPYABLE_CAPTURE_STORAGE_KEY = "copyableCapture";
 const CAPTURE_REF_MARK = "__vorovaykaCaptureRef";
+const FULL_CAPTURE_KEY = "active";
 const MAX_HTML_CHARS = 50 * 1024;
 const MAX_TEXT_CHARS = 12 * 1024;
 const MAX_REQUEST_CHARS = 20 * 1024;
@@ -972,6 +973,7 @@ function sanitizeCleanTree(node) {
 
   Array.from(node.attributes).forEach((attribute) => {
     const name = attribute.name.toLowerCase();
+    const value = attribute.value || "";
     if (
       name === "style" ||
       name === "class" ||
@@ -981,6 +983,11 @@ function sanitizeCleanTree(node) {
       SENSITIVE_FIELD_PATTERN.test(name)
     ) {
       node.removeAttribute(attribute.name);
+      return;
+    }
+
+    if (URL_ATTRIBUTE_NAMES.has(name) && isInlineDataImageUrl(value)) {
+      node.setAttribute(attribute.name, "[inline-data-image]");
     }
   });
 
@@ -999,12 +1006,17 @@ function sanitizePreviewTree(cloneNode, sourceNode) {
 
   Array.from(cloneNode.attributes).forEach((attribute) => {
     const name = attribute.name.toLowerCase();
+    const value = attribute.value || "";
     if (
       name === "style" ||
       name.startsWith("on") ||
-      URL_ATTRIBUTE_NAMES.has(name) ||
       SENSITIVE_FIELD_PATTERN.test(name)
     ) {
+      cloneNode.removeAttribute(attribute.name);
+      return;
+    }
+
+    if (URL_ATTRIBUTE_NAMES.has(name) && !isSafePreviewUrl(cloneNode.tagName, name, value)) {
       cloneNode.removeAttribute(attribute.name);
     }
   });
@@ -1039,6 +1051,37 @@ function getSafeInlineStyle(element) {
   declarations.push("max-width: 100%");
   declarations.push("min-width: 0");
   return declarations.join("; ");
+}
+
+function isInlineDataImageUrl(value) {
+  return /^data:image\/[a-z0-9.+-]+;base64,/i.test(String(value || "").trim());
+}
+
+function isSafePreviewUrl(tagName, attributeName, value) {
+  const normalizedTag = String(tagName || "").toLowerCase();
+  const normalizedAttribute = String(attributeName || "").toLowerCase();
+  const normalizedValue = String(value || "").trim();
+
+  if (!normalizedValue) {
+    return false;
+  }
+
+  if (normalizedAttribute === "srcset") {
+    return normalizedValue
+      .split(",")
+      .map((item) => item.trim().split(/\s+/)[0] || "")
+      .every(isInlineDataImageUrl);
+  }
+
+  if (normalizedAttribute === "src" || normalizedAttribute === "poster") {
+    return isInlineDataImageUrl(normalizedValue);
+  }
+
+  if ((normalizedAttribute === "href" || normalizedAttribute === "xlink:href") && normalizedTag === "image") {
+    return isInlineDataImageUrl(normalizedValue);
+  }
+
+  return false;
 }
 
 async function rankRequests(domSnapshot, eventTs, reportProgress = () => {}) {
@@ -1327,9 +1370,28 @@ async function persistLatestCapture(payload, list, reportProgress = () => {}) {
 async function persistCaptureToStorage(capture, reportProgress = () => {}) {
   await chrome.storage.local.remove([LATEST_CAPTURE_STORAGE_KEY, COPYABLE_CAPTURE_STORAGE_KEY]);
 
-  const normalCapture = compactCaptureForStorage(capture, STORAGE_PROFILES.normal, "normal");
+  let fullCaptureMeta = {
+    available: false,
+    key: FULL_CAPTURE_KEY
+  };
   try {
-    await writeCaptureToStorage(normalCapture);
+    const response = await chrome.runtime.sendMessage({
+      type: "STORE_FULL_CAPTURE",
+      capture
+    });
+    if (response?.ok) {
+      fullCaptureMeta = {
+        available: true,
+        key: response.fullCaptureKey || FULL_CAPTURE_KEY
+      };
+    }
+  } catch {
+    // Full capture is best-effort; compact storage remains the fallback.
+  }
+
+  const normalCapture = compactCaptureForStorage(capture, STORAGE_PROFILES.normal, "normal", fullCaptureMeta);
+  try {
+    await writeCaptureToStorage(normalCapture, fullCaptureMeta);
     return;
   } catch (error) {
     if (!isQuotaExceededError(error)) {
@@ -1340,16 +1402,18 @@ async function persistCaptureToStorage(capture, reportProgress = () => {}) {
   reportProgress("Сжимаю capture для storage quota...", 94);
   await yieldToBrowser();
   await chrome.storage.local.remove([LATEST_CAPTURE_STORAGE_KEY, COPYABLE_CAPTURE_STORAGE_KEY]);
-  const tightCapture = compactCaptureForStorage(capture, STORAGE_PROFILES.tight, "tight");
-  await writeCaptureToStorage(tightCapture);
+  const tightCapture = compactCaptureForStorage(capture, STORAGE_PROFILES.tight, "tight", fullCaptureMeta);
+  await writeCaptureToStorage(tightCapture, fullCaptureMeta);
 }
 
-async function writeCaptureToStorage(capture) {
+async function writeCaptureToStorage(capture, fullCaptureMeta = {}) {
   await chrome.storage.local.set({
     [COPYABLE_CAPTURE_STORAGE_KEY]: capture,
     [LATEST_CAPTURE_STORAGE_KEY]: {
       [CAPTURE_REF_MARK]: true,
       storageKey: COPYABLE_CAPTURE_STORAGE_KEY,
+      fullCaptureAvailable: Boolean(fullCaptureMeta.available),
+      fullCaptureKey: fullCaptureMeta.key || FULL_CAPTURE_KEY,
       createdAt: capture.createdAt,
       page: capture.page || {}
     }
@@ -1360,7 +1424,7 @@ function isQuotaExceededError(error) {
   return /quota/i.test(String(error?.message || error || ""));
 }
 
-function compactCaptureForStorage(capture, limits, profile) {
+function compactCaptureForStorage(capture, limits, profile, fullCaptureMeta = {}) {
   const recipe = compactRecipeForStorage(capture.cloneSpec || capture.elementRecipe, limits);
   return {
     createdAt: capture.createdAt,
@@ -1376,7 +1440,9 @@ function compactCaptureForStorage(capture, limits, profile) {
     storageMeta: {
       profile,
       latestCaptureUsesRef: true,
-      rawResponseBodiesTruncated: true
+      rawResponseBodiesTruncated: true,
+      fullCaptureAvailable: Boolean(fullCaptureMeta.available),
+      fullCaptureKey: fullCaptureMeta.key || FULL_CAPTURE_KEY
     }
   };
 }

@@ -28,7 +28,8 @@ async function init() {
   }
 
   if (stored[COPYABLE_CAPTURE_STORAGE_KEY]) {
-    renderCapture(stored[COPYABLE_CAPTURE_STORAGE_KEY]);
+    const capture = await resolveStoredCapture(stored[COPYABLE_CAPTURE_STORAGE_KEY]);
+    renderCapture(capture || stored[COPYABLE_CAPTURE_STORAGE_KEY]);
   }
 }
 
@@ -44,12 +45,32 @@ async function renderStoredCapture(storedCapture, options = {}) {
 
 async function resolveStoredCapture(value, fallbackCapture = null) {
   if (value?.[CAPTURE_REF_MARK]) {
+    if (value.fullCaptureAvailable) {
+      const response = await chrome.runtime.sendMessage({
+        type: "GET_FULL_CAPTURE",
+        fullCaptureKey: value.fullCaptureKey
+      }).catch(() => null);
+      if (response?.ok && response.capture) {
+        return response.capture;
+      }
+    }
+
     if (fallbackCapture) {
       return fallbackCapture;
     }
     const key = value.storageKey || COPYABLE_CAPTURE_STORAGE_KEY;
     const stored = await chrome.storage.local.get(key);
-    return stored[key] || null;
+    return await resolveStoredCapture(stored[key] || null);
+  }
+
+  if (value?.storageMeta?.fullCaptureAvailable) {
+    const response = await chrome.runtime.sendMessage({
+      type: "GET_FULL_CAPTURE",
+      fullCaptureKey: value.storageMeta.fullCaptureKey
+    }).catch(() => null);
+    if (response?.ok && response.capture) {
+      return response.capture;
+    }
   }
 
   return value || null;
@@ -66,6 +87,10 @@ function renderCapture(capture) {
 
   const root = document.createElement("div");
   root.className = "viewer-grid";
+  const warnings = renderCaptureWarnings(capture);
+  if (warnings) {
+    root.append(warnings);
+  }
   root.append(
     renderOverview(bundle),
     renderApiSection(bundle),
@@ -145,8 +170,9 @@ function renderOverview(bundle) {
 
   const previewWrap = document.createElement("div");
   previewWrap.className = "preview-card";
-  if (bundle.dom?.previewHtml) {
-    previewWrap.appendChild(renderElementPreview(bundle.dom.previewHtml));
+  const previewMarkup = bundle.dom?.previewHtml || bundle.dom?.cleanHtml || "";
+  if (previewMarkup) {
+    previewWrap.appendChild(renderElementPreview(previewMarkup));
   } else {
     const empty = document.createElement("div");
     empty.className = "empty";
@@ -165,6 +191,51 @@ function renderOverview(bundle) {
 
   body.append(previewWrap, meta);
   section.append(header, body);
+  return section;
+}
+
+function renderCaptureWarnings(capture) {
+  const warnings = [];
+
+  if (capture?.storageMeta?.fullCaptureAvailable === false) {
+    warnings.push("Полный capture недоступен, viewer показывает compact fallback из storage.");
+  }
+
+  const hasTruncatedBodies = Boolean(
+    capture?.storageMeta?.rawResponseBodiesTruncated ||
+    (capture?.network || []).some((item) => (
+      Boolean(item?.bodyTooLarge) ||
+      String(item?.responseBody || "").includes("...[truncated]") ||
+      String(item?.requestBody || "").includes("...[truncated]")
+    ))
+  );
+  if (hasTruncatedBodies) {
+    warnings.push("Часть request/response body была обрезана на этапе захвата или fallback-хранения.");
+  }
+
+  const hasTruncatedDom = Boolean(
+    String(capture?.dom?.innerText || "").includes("...[truncated]") ||
+    String(capture?.dom?.outerHTML || "").includes("...[truncated]") ||
+    String(capture?.dom?.previewHTML || "").includes("...[truncated]")
+  );
+  if (hasTruncatedDom) {
+    warnings.push("DOM snapshot сохранён не полностью; export может отличаться от исходного узла.");
+  }
+
+  if (!warnings.length) {
+    return null;
+  }
+
+  const section = document.createElement("section");
+  section.className = "card";
+  section.innerHTML = `
+    <div class="section-head">
+      <div>
+        <h2>Ограничения capture</h2>
+        <p class="section-copy">${escapeHtml(warnings.join(" "))}</p>
+      </div>
+    </div>
+  `;
   return section;
 }
 
@@ -241,6 +312,7 @@ function renderExportSection(bundle) {
   controls.innerHTML = `
     <label><input type="radio" name="export-scope" value="all" checked /> Всё вместе</label>
     <label><input type="radio" name="export-scope" value="api" /> API</label>
+    <label><input type="radio" name="export-scope" value="api-types" /> API types</label>
     <label><input type="radio" name="export-scope" value="dom-clean" /> DOM clean</label>
     <label><input type="radio" name="export-scope" value="dom-raw" /> DOM raw</label>
   `;
@@ -302,6 +374,11 @@ function buildExportPayload(bundle, scope, selectedApiIds) {
     return payload;
   }
 
+  if (scope === "api-types") {
+    payload.apiTypes = buildApiTypesExport(selectedApi);
+    return payload;
+  }
+
   if (scope === "dom-clean") {
     payload.dom = {
       tagName: bundle.dom?.tagName || "",
@@ -326,11 +403,21 @@ function buildExportPayload(bundle, scope, selectedApiIds) {
     tagName: bundle.dom?.tagName || "",
     selector: bundle.dom?.selector || "",
     textPreview: bundle.dom?.textPreview || "",
-    cleanHtml: bundle.dom?.cleanHtml || "",
-    rawHtml: bundle.dom?.rawHtml || ""
+    cleanHtml: bundle.dom?.cleanHtml || ""
   };
-  payload.api = selectedApi;
+  payload.apiTypes = buildApiTypesExport(selectedApi);
   return payload;
+}
+
+function buildApiTypesExport(apiRecords) {
+  return (apiRecords || []).map((item, index) => ({
+    id: item.id || item.requestId || `api-${index + 1}`,
+    method: item.method || "GET",
+    url: item.url || "",
+    status: item.status || 0,
+    contentType: item.contentType || "",
+    responseType: extractResponseShape(item)
+  }));
 }
 
 function renderMetric(label, value) {
@@ -425,6 +512,69 @@ function buildResponsePreview(responseBody, contentType) {
   }
 
   return shortenText(text.replace(/\s+/g, " "), 140);
+}
+
+function extractResponseShape(request) {
+  const parsed = parseJsonBody(request?.responseBody, request?.contentType);
+  if (parsed == null) {
+    return {
+      type: request?.responseBody ? "text" : "empty",
+      preview: shortenText(request?.responseBody || "", 500)
+    };
+  }
+
+  return buildDataShape(parsed);
+}
+
+function parseJsonBody(body, contentType = "") {
+  const text = String(body || "").trim();
+  if (!text) {
+    return null;
+  }
+
+  const looksLikeJson = String(contentType || "").toLowerCase().includes("application/json") ||
+    text.startsWith("{") ||
+    text.startsWith("[");
+  if (!looksLikeJson) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function buildDataShape(value, depth = 0) {
+  if (Array.isArray(value)) {
+    const firstMeaningfulItem = value.find((item) => item != null);
+    return {
+      type: "array",
+      length: value.length,
+      item: depth >= 4 || firstMeaningfulItem == null ? { type: "unknown" } : buildDataShape(firstMeaningfulItem, depth + 1)
+    };
+  }
+
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value).slice(0, 16);
+    if (depth >= 4) {
+      return {
+        type: "object",
+        keys
+      };
+    }
+
+    return {
+      type: "object",
+      keys: Object.fromEntries(keys.map((key) => [key, buildDataShape(value[key], depth + 1)]))
+    };
+  }
+
+  return {
+    type: value === null ? "null" : typeof value,
+    example: shortenText(String(value ?? ""), 120)
+  };
 }
 
 function formatCapturedAt(value) {

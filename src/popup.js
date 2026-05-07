@@ -52,7 +52,7 @@ startButton.addEventListener("click", async () => {
 
 copyButton.addEventListener("click", async () => {
   const stored = await chrome.storage.local.get([COPYABLE_CAPTURE_STORAGE_KEY, LATEST_CAPTURE_STORAGE_KEY]);
-  const capture = resolveStoredCapture(stored[COPYABLE_CAPTURE_STORAGE_KEY] || stored[LATEST_CAPTURE_STORAGE_KEY], stored);
+  const capture = await resolveStoredCapture(stored[COPYABLE_CAPTURE_STORAGE_KEY] || stored[LATEST_CAPTURE_STORAGE_KEY], stored);
   if (!capture) {
     setMessage("Нет сохранённого захвата. Сначала выберите элемент и сохраните capture.");
     await refreshState();
@@ -69,10 +69,31 @@ copyButton.addEventListener("click", async () => {
   }
 });
 
-function resolveStoredCapture(value, stored) {
+async function resolveStoredCapture(value, stored) {
   if (value?.[CAPTURE_REF_MARK]) {
+    if (value.fullCaptureAvailable) {
+      const response = await chrome.runtime.sendMessage({
+        type: "GET_FULL_CAPTURE",
+        fullCaptureKey: value.fullCaptureKey
+      }).catch(() => null);
+      if (response?.ok && response.capture) {
+        return response.capture;
+      }
+    }
+
     return stored[value.storageKey || COPYABLE_CAPTURE_STORAGE_KEY] || null;
   }
+
+  if (value?.storageMeta?.fullCaptureAvailable) {
+    const response = await chrome.runtime.sendMessage({
+      type: "GET_FULL_CAPTURE",
+      fullCaptureKey: value.storageMeta.fullCaptureKey
+    }).catch(() => null);
+    if (response?.ok && response.capture) {
+      return response.capture;
+    }
+  }
+
   return value || null;
 }
 

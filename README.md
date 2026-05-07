@@ -36,10 +36,11 @@
 - Request context: best-effort `requestBody` для `fetch(init.body)` и `XHR.send(body)` с редактированием очевидных секретов
 - Element recipe / clone spec: упорядоченная API-последовательность, shape JSON-ответа, `domFacts`, `responseFacts`, `bindings`, `apiDependencies`, `renderEvidence` и найденные поля, совпавшие с видимыми данными выбранного элемента
 - API dependencies: viewer показывает sequence только при доказанном совпадении “response value из раннего API → request URL/body/header более позднего API”; если таких связей нет, diagram скрыта
-- Export JSON: viewer выгружает строгий `element-export` только по выбранному элементу: верстка элемента и связанные API с JSON-path нужных данных; `responseShape`, сырые ответы, DOM-контекст и debug не попадают в export
+- Export JSON: viewer поддерживает режимы `Всё вместе`, `API`, `API types`, `DOM clean` и `DOM raw`; по умолчанию `Всё вместе` теперь отдаёт `DOM clean` и структурную типизацию выбранных API-ответов без `rawHtml` и без полных response body
 - Viewer UX: первый экран сфокусирован только на `DOM preview`, списке выбранных API и экспорте с preview итогового payload; raw debug остаётся вторичным
 - Provenance matching: нормализация текста, чисел, валют, процентов и дат; multi-field context matching внутри одного JSON-объекта; лёгкий DOM mutation trace для evidence “ответ пришёл → DOM изменился”
 - Viewer preview: `previewHTML` рендерится в sandboxed `iframe` с CSP `default-src 'none'`, без внешних ресурсов; нужные computed styles выбранного фрагмента инлайнятся в безопасном виде
+- Full capture storage: viewer и popup сначала пытаются читать полный capture из фонового локального хранилища расширения; `chrome.storage.local` остаётся компактным fallback для summary и аварийного восстановления
 - Frontend evidence: best-effort call stack места вызова `fetch`/`XHR` сохраняется локально и показывается во viewer
 - Progress UX: долгий анализ показывает этапы и прогресс при выборе элемента и при сохранении/открытии viewer
 - Ограничения: HTML до `50KB`, preview HTML до `50KB`, request body до `20KB`, response body до `512KB`, call stack до `8KB`, в модалке может быть показано до `20` запросов
