@@ -170,9 +170,9 @@ function renderOverview(bundle) {
 
   const previewWrap = document.createElement("div");
   previewWrap.className = "preview-card";
-  const previewMarkup = bundle.dom?.previewHtml || bundle.dom?.cleanHtml || "";
-  if (previewMarkup) {
-    previewWrap.appendChild(renderElementPreview(previewMarkup));
+  const hasPreview = bundle.dom?.previewHtml || bundle.dom?.cleanHtml;
+  if (hasPreview) {
+    previewWrap.appendChild(renderElementPreview(bundle.dom || {}));
   } else {
     const empty = document.createElement("div");
     empty.className = "empty";
@@ -438,17 +438,33 @@ function renderCodeBlock(title, value) {
   `;
 }
 
-function renderElementPreview(previewHtml) {
+function renderElementPreview(dom = {}) {
   const wrap = document.createElement("div");
   wrap.className = "preview-frame";
+
+  const cleanPreview = document.createElement("div");
+  cleanPreview.className = "clean-preview";
+  cleanPreview.innerHTML = dom.cleanHtml || dom.previewHtml || "";
+  wrap.appendChild(cleanPreview);
+
+  if (!dom.previewHtml || dom.previewHtml === dom.cleanHtml) {
+    return wrap;
+  }
+
+  const details = document.createElement("details");
+  details.className = "preview-styled";
+
+  const summary = document.createElement("summary");
+  summary.textContent = "Стилизованное preview";
 
   const frame = document.createElement("iframe");
   frame.className = "element-preview";
   frame.setAttribute("sandbox", "");
   frame.setAttribute("referrerpolicy", "no-referrer");
-  frame.srcdoc = buildPreviewDocument(previewHtml);
+  frame.srcdoc = buildPreviewDocument(dom.previewHtml);
 
-  wrap.appendChild(frame);
+  details.append(summary, frame);
+  wrap.appendChild(details);
   return wrap;
 }
 

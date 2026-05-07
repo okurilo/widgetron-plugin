@@ -131,6 +131,34 @@ h2 {
   background: #fff;
 }
 
+.clean-preview {
+  padding: 16px;
+  color: var(--ink);
+  background: #fff;
+  pointer-events: none;
+  user-select: none;
+  overflow: auto;
+}
+
+.clean-preview img,
+.clean-preview svg,
+.clean-preview video,
+.clean-preview canvas {
+  max-width: 100%;
+}
+
+.preview-styled {
+  border-top: 1px solid var(--line);
+  background: #f8fafc;
+}
+
+.preview-styled summary {
+  padding: 10px 16px;
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 700;
+}
+
 .element-preview {
   display: block;
   width: 100%;

@@ -39,7 +39,7 @@
 - Export JSON: viewer поддерживает режимы `Всё вместе`, `API`, `API types`, `DOM clean` и `DOM raw`; по умолчанию `Всё вместе` теперь отдаёт `DOM clean` и структурную типизацию выбранных API-ответов без `rawHtml` и без полных response body
 - Viewer UX: первый экран сфокусирован только на `DOM preview`, списке выбранных API и экспорте с preview итогового payload; raw debug остаётся вторичным
 - Provenance matching: нормализация текста, чисел, валют, процентов и дат; multi-field context matching внутри одного JSON-объекта; лёгкий DOM mutation trace для evidence “ответ пришёл → DOM изменился”
-- Viewer preview: `previewHTML` рендерится в sandboxed `iframe` с CSP `default-src 'none'`, без внешних ресурсов; нужные computed styles выбранного фрагмента инлайнятся в безопасном виде
+- Viewer preview: основной блок теперь стабильно показывает `cleanHtml`, а стилизованный `previewHTML` остаётся дополнительным sandboxed `iframe`-режимом с CSP `default-src 'none'` и без внешних ресурсов
 - Full capture storage: viewer и popup сначала пытаются читать полный capture из фонового локального хранилища расширения; `chrome.storage.local` остаётся компактным fallback для summary и аварийного восстановления
 - Frontend evidence: best-effort call stack места вызова `fetch`/`XHR` сохраняется локально и показывается во viewer
 - Progress UX: долгий анализ показывает этапы и прогресс при выборе элемента и при сохранении/открытии viewer
