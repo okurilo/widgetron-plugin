@@ -37,7 +37,7 @@
 - Element recipe / clone spec: упорядоченная API-последовательность, shape JSON-ответа, `domFacts`, `responseFacts`, `bindings`, `apiDependencies`, `renderEvidence` и найденные поля, совпавшие с видимыми данными выбранного элемента
 - API dependencies: viewer показывает sequence только при доказанном совпадении “response value из раннего API → request URL/body/header более позднего API”; если таких связей нет, diagram скрыта
 - Export JSON: viewer поддерживает режимы `Всё вместе`, `API`, `API types`, `DOM clean` и `DOM raw`; по умолчанию `Всё вместе` теперь отдаёт `DOM clean` и структурную типизацию выбранных API-ответов без `rawHtml` и без полных response body
-- Viewer UX: первый экран сфокусирован только на `DOM preview`, списке выбранных API и экспорте с preview итогового payload; raw debug остаётся вторичным
+- Viewer UX: первый экран сфокусирован на `DOM preview`, где совпавшие поля помечаются прямо в HTML-превью и сопровождаются компактной легендой `API → DOM`, списке выбранных API и экспорте с preview итогового payload; raw debug остаётся вторичным
 - Provenance matching: нормализация текста, чисел, валют, процентов и дат; multi-field context matching внутри одного JSON-объекта; лёгкий DOM mutation trace для evidence “ответ пришёл → DOM изменился”
 - Viewer preview: основной блок теперь стабильно показывает `cleanHtml`, а стилизованный `previewHTML` остаётся дополнительным sandboxed `iframe`-режимом с CSP `default-src 'none'` и без внешних ресурсов
 - Full capture storage: viewer и popup сначала пытаются читать полный capture из фонового локального хранилища расширения; `chrome.storage.local` остаётся компактным fallback для summary и аварийного восстановления

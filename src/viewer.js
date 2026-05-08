@@ -78,6 +78,7 @@ async function resolveStoredCapture(value, fallbackCapture = null) {
 
 function renderCapture(capture) {
   const bundle = normalizeCaptureBundle(capture);
+  const recipe = getElementRecipe(capture);
   stateEl.innerHTML = "";
 
   if (!bundle) {
@@ -92,7 +93,7 @@ function renderCapture(capture) {
     root.append(warnings);
   }
   root.append(
-    renderOverview(bundle),
+    renderOverview(bundle, recipe),
     renderApiSection(bundle),
     renderExportSection(bundle)
   );
@@ -151,7 +152,7 @@ function normalizeCaptureBundle(capture) {
   };
 }
 
-function renderOverview(bundle) {
+function renderOverview(bundle, recipe) {
   const section = document.createElement("section");
   section.className = "card overview";
 
@@ -172,7 +173,7 @@ function renderOverview(bundle) {
   previewWrap.className = "preview-card";
   const hasPreview = bundle.dom?.previewHtml || bundle.dom?.cleanHtml;
   if (hasPreview) {
-    previewWrap.appendChild(renderElementPreview(bundle.dom || {}));
+    previewWrap.appendChild(renderElementPreview(bundle.dom || {}, recipe));
   } else {
     const empty = document.createElement("div");
     empty.className = "empty";
@@ -187,6 +188,7 @@ function renderOverview(bundle) {
     ${renderMetric("Селектор", bundle.dom?.selector || "—")}
     ${renderMetric("Текст", bundle.dom?.textPreview || "—")}
     ${renderMetric("API", String(bundle.api?.length || 0))}
+    ${renderMetric("Матчи", String((recipe.bindings || recipe.dataRequirements || []).length || 0))}
   `;
 
   body.append(previewWrap, meta);
@@ -292,6 +294,7 @@ function renderApiSection(bundle) {
   section.appendChild(list);
   return section;
 }
+
 
 function renderExportSection(bundle) {
   const section = document.createElement("section");
@@ -438,14 +441,123 @@ function renderCodeBlock(title, value) {
   `;
 }
 
-function renderElementPreview(dom = {}) {
+function getElementRecipe(capture) {
+  if (capture?.cloneSpec) {
+    return capture.cloneSpec;
+  }
+
+  if (capture?.elementRecipe) {
+    return capture.elementRecipe;
+  }
+
+  const network = capture?.network || capture?.captureBundle?.api || [];
+  return {
+    version: 0,
+    confidence: network.length > 0 ? "low" : "dom-only",
+    element: {
+      selector: capture?.dom?.selector || capture?.captureBundle?.dom?.selector || "",
+      tagName: capture?.dom?.tagName || capture?.captureBundle?.dom?.tagName || "",
+      textPreview: capture?.dom?.innerText || capture?.captureBundle?.dom?.textPreview || ""
+    },
+    domFacts: capture?.dom?.facts || [],
+    responseFacts: [],
+    bindings: [],
+    renderEvidence: [],
+    apiSequence: network.map((request, index) => ({
+      requestId: request.id || request.requestId || `request-${index + 1}`,
+      step: index + 1,
+      method: request.method || "GET",
+      url: request.url || "",
+      status: request.status || 0,
+      contentType: request.contentType || "",
+      calledAt: request.timestamp ? new Date(Number(request.timestamp)).toISOString() : "",
+      relativeToInteractionMs: null,
+      response: {
+        shape: extractResponseShape(request),
+        matchedFields: []
+      }
+    })),
+    apiDependencies: [],
+    dataRequirements: [],
+    sequence: []
+  };
+}
+
+function findById(items = [], id) {
+  return (items || []).find((item) => item.id === id) || null;
+}
+
+function formatConfidence(value) {
+  const labels = {
+    high: "Высокая",
+    medium: "Средняя",
+    low: "Низкая",
+    "dom-only": "Только DOM"
+  };
+  return labels[value] || value || "—";
+}
+
+function formatConfidenceScore(value) {
+  const number = Number(value);
+  if (Number.isFinite(number)) {
+    return `${Math.round(number * 100)}%`;
+  }
+  return formatConfidence(value);
+}
+
+function shortEndpoint(binding) {
+  const endpoint = `${binding.method || ""} ${binding.url || ""}`.trim();
+  if (!endpoint) {
+    return "—";
+  }
+  return endpoint.length <= 96 ? endpoint : `${endpoint.slice(0, 93)}...`;
+}
+
+function formatReason(reason) {
+  const labels = {
+    "exact-text-match": "точный текст",
+    "normalized-value-match": "нормализованное значение",
+    "duration-number-match": "длительность к числу",
+    "text-fragment-match": "фрагмент текста",
+    "same-object-context": "контекст объекта",
+    "response-key-context": "ключ ответа",
+    "semantic-context-match": "семантический контекст",
+    "post-response-mutation": "DOM обновился после ответа",
+    "weak-numeric-match": "слабое числовое совпадение",
+    "response-value-reused-in-request": "значение из ответа использовано в следующем запросе",
+    "request-url-query": "совпало с query-параметром",
+    "request-url-path": "совпало с path-сегментом",
+    "request-body-json": "совпало с JSON body",
+    "request-body-form": "совпало с form body",
+    "request-body-text": "совпало с текстом body",
+    "request-header": "совпало с request header",
+    "request-key-context": "совпал контекст ключа запроса",
+    "semantic-request-context": "семантика запроса совпала"
+  };
+  return labels[reason] || reason;
+}
+
+function formatStepTiming(step) {
+  const parts = [];
+  if (step.calledAt) {
+    parts.push(new Date(step.calledAt).toLocaleString("ru-RU"));
+  }
+  if (Number.isFinite(Number(step.relativeToInteractionMs))) {
+    parts.push(`${step.relativeToInteractionMs} ms от выбора`);
+  }
+  return parts.join(" · ");
+}
+
+function renderElementPreview(dom = {}, recipe = {}) {
   const wrap = document.createElement("div");
   wrap.className = "preview-frame";
 
-  const cleanPreview = document.createElement("div");
-  cleanPreview.className = "clean-preview";
-  cleanPreview.innerHTML = dom.cleanHtml || dom.previewHtml || "";
-  wrap.appendChild(cleanPreview);
+  const previewBindings = getPreviewBindings(recipe);
+  wrap.appendChild(buildPreviewHighlightDom(dom.cleanHtml || dom.previewHtml || "", previewBindings));
+
+  if (previewBindings.length > 0) {
+    wrap.appendChild(renderPreviewMatchLegend(previewBindings));
+  }
 
   if (!dom.previewHtml || dom.previewHtml === dom.cleanHtml) {
     return wrap;
@@ -466,6 +578,134 @@ function renderElementPreview(dom = {}) {
   details.append(summary, frame);
   wrap.appendChild(details);
   return wrap;
+}
+
+function getPreviewBindings(recipe) {
+  const bindings = recipe.bindings || recipe.dataRequirements || [];
+  const seen = new Set();
+  return bindings
+    .filter((binding) => {
+      const previewText = normalizeTextForPreview(binding.domValue || binding.value || "");
+      if (!previewText) {
+        return false;
+      }
+      const key = `${binding.domFactId || ""}:${previewText}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0))
+    .slice(0, 12)
+    .map((binding, index) => ({
+      ...binding,
+      previewIndex: index + 1,
+      previewValue: String(binding.domValue || binding.value || ""),
+      previewText: normalizeTextForPreview(binding.domValue || binding.value || "")
+    }));
+}
+
+function buildPreviewHighlightDom(html, bindings) {
+  const container = document.createElement("div");
+  container.className = "clean-preview";
+
+  if (!html) {
+    return container;
+  }
+
+  if (!bindings.length) {
+    container.innerHTML = html;
+    return container;
+  }
+
+  try {
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const remaining = new Map(bindings.map((binding) => [binding.previewIndex, binding]));
+    const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+
+    while (walker.nextNode() && remaining.size > 0) {
+      const textNode = walker.currentNode;
+      const source = textNode.textContent || "";
+      const normalizedSource = normalizeTextForPreview(source);
+      if (!normalizedSource) {
+        continue;
+      }
+
+      const matched = Array.from(remaining.values()).find((binding) => normalizedSource.includes(binding.previewText));
+      if (!matched) {
+        continue;
+      }
+
+      const rawIndex = source.toLowerCase().indexOf(matched.previewValue.toLowerCase());
+      if (rawIndex < 0) {
+        continue;
+      }
+
+      const before = source.slice(0, rawIndex);
+      const exact = source.slice(rawIndex, rawIndex + matched.previewValue.length);
+      const after = source.slice(rawIndex + matched.previewValue.length);
+      const fragment = document.createDocumentFragment();
+      if (before) {
+        fragment.appendChild(document.createTextNode(before));
+      }
+
+      const mark = document.createElement("mark");
+      mark.className = "dom-match-mark";
+      mark.dataset.matchIndex = String(matched.previewIndex);
+      mark.title = `${matched.responsePath || matched.path || "JSON path"} • ${shortEndpoint(matched)}`;
+      mark.textContent = exact;
+      fragment.appendChild(mark);
+
+      if (after) {
+        fragment.appendChild(document.createTextNode(after));
+      }
+
+      textNode.parentNode?.replaceChild(fragment, textNode);
+      remaining.delete(matched.previewIndex);
+    }
+
+    container.appendChild(template.content.cloneNode(true));
+    return container;
+  } catch {
+    container.innerHTML = html;
+    return container;
+  }
+}
+
+function renderPreviewMatchLegend(bindings) {
+  const legend = document.createElement("div");
+  legend.className = "dom-match-legend";
+
+  const title = document.createElement("div");
+  title.className = "dom-match-legend__title";
+  title.textContent = "Матчи в DOM preview";
+  legend.appendChild(title);
+
+  bindings.forEach((binding) => {
+    const row = document.createElement("div");
+    row.className = "dom-match-row";
+    row.innerHTML = `
+      <span class="dom-match-row__index">${escapeHtml(String(binding.previewIndex))}</span>
+      <div class="dom-match-row__body">
+        <strong>${escapeHtml(binding.previewValue || "—")}</strong>
+        <small>${escapeHtml(binding.responsePath || binding.path || "—")}</small>
+        <small>${escapeHtml(shortEndpoint(binding))}</small>
+      </div>
+      <span class="dom-match-row__score">${escapeHtml(formatConfidenceScore(binding.confidence))}</span>
+    `;
+    legend.appendChild(row);
+  });
+
+  return legend;
+}
+
+function normalizeTextForPreview(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 function buildPreviewDocument(previewHtml) {
