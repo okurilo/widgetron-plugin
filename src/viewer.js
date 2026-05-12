@@ -95,7 +95,7 @@ function renderCapture(capture) {
   root.append(
     renderOverview(bundle, recipe),
     renderApiSection(bundle),
-    renderExportSection(bundle)
+    renderExportSection(bundle, recipe)
   );
 
   stateEl.appendChild(root);
@@ -296,7 +296,7 @@ function renderApiSection(bundle) {
 }
 
 
-function renderExportSection(bundle) {
+function renderExportSection(bundle, recipe = {}) {
   const section = document.createElement("section");
   section.className = "card";
 
@@ -315,7 +315,7 @@ function renderExportSection(bundle) {
   controls.innerHTML = `
     <label><input type="radio" name="export-scope" value="all" checked /> Всё вместе</label>
     <label><input type="radio" name="export-scope" value="api" /> API</label>
-    <label><input type="radio" name="export-scope" value="api-types" /> API types</label>
+    <label><input type="radio" name="export-scope" value="api-types" /> OpenAPI schema</label>
     <label><input type="radio" name="export-scope" value="dom-clean" /> DOM clean</label>
     <label><input type="radio" name="export-scope" value="dom-raw" /> DOM raw</label>
   `;
@@ -335,11 +335,8 @@ function renderExportSection(bundle) {
 
   const refresh = () => {
     const scope = section.querySelector("input[name='export-scope']:checked")?.value || "all";
-    const selectedApiIds = new Set(
-      Array.from(document.querySelectorAll(".api-select:checked"))
-        .map((input) => input.dataset.apiId)
-    );
-    const payload = buildExportPayload(bundle, scope, selectedApiIds);
+    const selectedApiIds = getSelectedApiIds(bundle, stateEl);
+    const payload = buildExportPayload(bundle, recipe, scope, selectedApiIds);
     preview.textContent = JSON.stringify(payload, null, 2);
     copyButton.onclick = async () => {
       try {
@@ -360,7 +357,20 @@ function renderExportSection(bundle) {
   return section;
 }
 
-function buildExportPayload(bundle, scope, selectedApiIds) {
+function getSelectedApiIds(bundle, root = document) {
+  const allInputs = Array.from(root.querySelectorAll?.(".api-select") || []);
+  if (!allInputs.length) {
+    return new Set((bundle.api || []).map((item, index) => String(item.id || item.requestId || String(index))));
+  }
+
+  return new Set(
+    allInputs
+      .filter((input) => input.checked)
+      .map((input) => input.dataset.apiId)
+  );
+}
+
+function buildExportPayload(bundle, recipe, scope, selectedApiIds) {
   const selectedApi = (bundle.api || []).filter((item, index) => {
     const id = item.id || item.requestId || String(index);
     return selectedApiIds.has(id);
@@ -378,7 +388,7 @@ function buildExportPayload(bundle, scope, selectedApiIds) {
   }
 
   if (scope === "api-types") {
-    payload.apiTypes = buildApiTypesExport(selectedApi);
+    payload.apiSchema = buildApiSchemaExport(selectedApi, recipe);
     return payload;
   }
 
@@ -408,19 +418,30 @@ function buildExportPayload(bundle, scope, selectedApiIds) {
     textPreview: bundle.dom?.textPreview || "",
     cleanHtml: bundle.dom?.cleanHtml || ""
   };
-  payload.apiTypes = buildApiTypesExport(selectedApi);
+  payload.apiSchema = buildApiSchemaExport(selectedApi, recipe);
   return payload;
 }
 
-function buildApiTypesExport(apiRecords) {
+function buildApiSchemaExport(apiRecords, recipe = {}) {
   return (apiRecords || []).map((item, index) => ({
     id: item.id || item.requestId || `api-${index + 1}`,
     method: item.method || "GET",
     url: item.url || "",
     status: item.status || 0,
     contentType: item.contentType || "",
-    responseType: extractResponseShape(item)
+    responseSchema: getApiResponseSchema(item, recipe, index)
   }));
+}
+
+function getApiResponseSchema(request, recipe = {}, index = 0) {
+  const requestId = request?.id || request?.requestId || `request-${index + 1}`;
+  const recipeStep = (recipe.apiSequence || []).find((step) => (
+    String(step?.requestId || "") === String(requestId)
+  ));
+  if (recipeStep?.response?.shape) {
+    return recipeStep.response.shape;
+  }
+  return extractResponseShape(request);
 }
 
 function renderMetric(label, value) {
@@ -803,12 +824,17 @@ function parseJsonBody(body, contentType = "") {
 }
 
 function buildDataShape(value, depth = 0) {
+  if (value === null) {
+    return {
+      nullable: true
+    };
+  }
+
   if (Array.isArray(value)) {
     const firstMeaningfulItem = value.find((item) => item != null);
     return {
       type: "array",
-      length: value.length,
-      item: depth >= 4 || firstMeaningfulItem == null ? { type: "unknown" } : buildDataShape(firstMeaningfulItem, depth + 1)
+      items: depth >= 4 || firstMeaningfulItem == null ? {} : buildDataShape(firstMeaningfulItem, depth + 1)
     };
   }
 
@@ -817,19 +843,18 @@ function buildDataShape(value, depth = 0) {
     if (depth >= 4) {
       return {
         type: "object",
-        keys
+        properties: Object.fromEntries(keys.map((key) => [key, {}]))
       };
     }
 
     return {
       type: "object",
-      keys: Object.fromEntries(keys.map((key) => [key, buildDataShape(value[key], depth + 1)]))
+      properties: Object.fromEntries(keys.map((key) => [key, buildDataShape(value[key], depth + 1)]))
     };
   }
 
   return {
-    type: value === null ? "null" : typeof value,
-    example: shortenText(String(value ?? ""), 120)
+    type: Number.isInteger(value) ? "integer" : typeof value
   };
 }
 

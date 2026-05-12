@@ -1210,7 +1210,7 @@ function showSelectionDialog(payload) {
 
   const summary = document.createElement("div");
   summary.className = "widgetron-modal__summary";
-  summary.textContent = `${payload.networkCandidates.length} кандидатов для проверки. Лучшие по score уже отмечены, но список можно уточнить вручную.`;
+  summary.textContent = `${payload.networkCandidates.length} запросов доступны для проверки. Наиболее подходящие уже отмечены, а рядом показан процент совпадения с выбранным элементом.`;
 
   const list = document.createElement("div");
   list.className = "widgetron-modal__list";
@@ -1233,9 +1233,13 @@ function showSelectionDialog(payload) {
 
     const meta = document.createElement("div");
     meta.className = "widgetron-modal__meta";
+    const matchPercent = formatCandidateMatchPercent(candidate.score);
+    const requestTitle = formatCandidateRequestTitle(candidate.method, candidate.url);
+    const requestSummary = formatCandidateRequestSummary(candidate.url);
     meta.innerHTML = [
-      `<strong>${escapeHtml(candidate.method)} ${escapeHtml(shortenUrl(candidate.url))}</strong>`,
-      `<span>Статус ${candidate.status || "?"} · score ${candidate.score} · ${escapeHtml(candidate.contentType || "unknown")}</span>`,
+      `<strong title="${escapeHtml(candidate.url || "")}">${escapeHtml(requestTitle)}</strong>`,
+      `<span>Статус ${candidate.status || "?"} · match ${matchPercent}% · score ${candidate.score} · ${escapeHtml(candidate.contentType || "unknown")}</span>`,
+      `<small>${escapeHtml(requestSummary)}</small>`,
       `<small>${escapeHtml(candidate.responsePreview || "Короткое превью ответа недоступно.")}</small>`
     ].join("");
 
@@ -1244,11 +1248,13 @@ function showSelectionDialog(payload) {
     list.appendChild(label);
   });
 
-  const actions = document.createElement("div");
-  actions.className = "widgetron-modal__actions";
   const progress = document.createElement("div");
   progress.className = "widgetron-modal__progress";
   progress.hidden = true;
+  const footer = document.createElement("div");
+  footer.className = "widgetron-modal__footer";
+  const actions = document.createElement("div");
+  actions.className = "widgetron-modal__actions";
 
   const openReceiverButton = document.createElement("button");
   openReceiverButton.textContent = "Открыть рабочую область";
@@ -1297,7 +1303,8 @@ function showSelectionDialog(payload) {
   });
 
   actions.append(openReceiverButton, saveButton, cancelButton);
-  modal.append(heading, summary, list, progress, actions);
+  footer.append(progress, actions);
+  modal.append(heading, summary, list, footer);
   uiRoot.appendChild(modal);
 }
 
@@ -2860,12 +2867,17 @@ function parseJsonBody(body, contentType = "") {
 }
 
 function buildDataShape(value, depth = 0) {
+  if (value === null) {
+    return {
+      nullable: true
+    };
+  }
+
   if (Array.isArray(value)) {
     const firstMeaningfulItem = value.find((item) => item != null);
     return {
       type: "array",
-      length: value.length,
-      item: depth >= 4 || firstMeaningfulItem == null ? { type: "unknown" } : buildDataShape(firstMeaningfulItem, depth + 1)
+      items: depth >= 4 || firstMeaningfulItem == null ? {} : buildDataShape(firstMeaningfulItem, depth + 1)
     };
   }
 
@@ -2874,19 +2886,18 @@ function buildDataShape(value, depth = 0) {
     if (depth >= 4) {
       return {
         type: "object",
-        keys
+        properties: Object.fromEntries(keys.map((key) => [key, {}]))
       };
     }
 
     return {
       type: "object",
-      keys: Object.fromEntries(keys.map((key) => [key, buildDataShape(value[key], depth + 1)]))
+      properties: Object.fromEntries(keys.map((key) => [key, buildDataShape(value[key], depth + 1)]))
     };
   }
 
   return {
-    type: value === null ? "null" : typeof value,
-    example: truncateText(String(value ?? ""), 120)
+    type: Number.isInteger(value) ? "integer" : typeof value
   };
 }
 
@@ -3446,7 +3457,9 @@ function ensureUi() {
         width: 460px;
         max-width: calc(100vw - 32px);
         max-height: 70vh;
-        overflow: auto;
+        overflow: hidden;
+        display: grid;
+        grid-template-rows: auto auto minmax(0, 1fr) auto;
         padding: 16px;
         border: 1px solid rgba(117, 158, 211, 0.24);
         border-radius: 22px;
@@ -3479,6 +3492,16 @@ function ensureUi() {
       #${UI_ROOT_ID} .widgetron-modal__list {
         display: grid;
         gap: 6px;
+        min-height: 0;
+        overflow: auto;
+        padding-right: 4px;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+      }
+      #${UI_ROOT_ID} .widgetron-modal__list::-webkit-scrollbar {
+        width: 0;
+        height: 0;
+        display: none;
       }
       #${UI_ROOT_ID} .widgetron-modal__item {
         display: grid;
@@ -3495,6 +3518,10 @@ function ensureUi() {
       #${UI_ROOT_ID} .widgetron-modal__meta small {
         display: block;
       }
+      #${UI_ROOT_ID} .widgetron-modal__meta strong {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
       #${UI_ROOT_ID} .widgetron-modal__meta span {
         color: #66809d;
       }
@@ -3504,10 +3531,19 @@ function ensureUi() {
         font-size: 12px;
         line-height: 1.35;
       }
+      #${UI_ROOT_ID} .widgetron-modal__footer {
+        position: sticky;
+        bottom: 0;
+        margin: 12px -16px -16px;
+        padding: 12px 16px 16px;
+        background: linear-gradient(180deg, rgba(243, 248, 255, 0.88), rgba(243, 248, 255, 0.98));
+        border-top: 1px solid rgba(117, 158, 211, 0.18);
+      }
       #${UI_ROOT_ID} .widgetron-modal__actions {
         display: flex;
+        flex-wrap: wrap;
         gap: 8px;
-        margin-top: 12px;
+        margin-top: 10px;
       }
       #${UI_ROOT_ID} button {
         border: 0;
@@ -3715,6 +3751,50 @@ function buildResponsePreview(responseBody, contentType) {
   }
 
   return truncateText(text.replace(/\s+/g, " "), 110);
+}
+
+function formatCandidateMatchPercent(score) {
+  const maxScore = 26;
+  const normalized = Math.max(0, Math.min(maxScore, Number(score) || 0));
+  return Math.round((normalized / maxScore) * 100);
+}
+
+function formatCandidateRequestTitle(method, url) {
+  const safeMethod = String(method || "GET").toUpperCase();
+  try {
+    const parsed = new URL(url || "", location.href);
+    return `${safeMethod} ${parsed.host}${parsed.pathname}`;
+  } catch {
+    return `${safeMethod} ${truncateText(String(url || ""), 120)}`;
+  }
+}
+
+function formatCandidateRequestSummary(url) {
+  const IMPORTANT_KEYS = new Set(["id", "ids", "v", "videoId", "lang", "locale", "fmt", "format", "kind", "type", "page", "limit", "offset", "query", "q", "part", "hl"]);
+  try {
+    const parsed = new URL(url || "", location.href);
+    const params = [];
+    parsed.searchParams.forEach((value, key) => {
+      params.push([key, value]);
+    });
+    if (!params.length) {
+      return "Без query-параметров";
+    }
+
+    const important = params
+      .filter(([key, value]) => IMPORTANT_KEYS.has(key) && !isVolatileQueryParam(key, value))
+      .slice(0, 4)
+      .map(([key, value]) => `${key}=${truncateText(String(value), 32).replace(/\n\.\.\.\[truncated\]$/, "...")}`);
+
+    const hiddenCount = Math.max(0, params.length - important.length);
+    if (important.length > 0) {
+      return `Параметры: ${important.join(" · ")}${hiddenCount > 0 ? ` · ещё ${hiddenCount}` : ""}`;
+    }
+
+    return `${params.length} query-параметров`;
+  } catch {
+    return truncateText(String(url || ""), 160).replace(/\n\.\.\.\[truncated\]$/, "...");
+  }
 }
 
 function normalizeText(text) {

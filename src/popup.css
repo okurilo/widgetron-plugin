@@ -22,9 +22,14 @@
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
   width: 392px;
+  overflow: hidden;
+}
+
+body {
   background:
     radial-gradient(circle at top left, rgba(84, 153, 255, 0.18), transparent 44%),
     linear-gradient(180deg, #f8fbff 0%, var(--bg) 100%);
@@ -33,13 +38,13 @@ body {
 }
 
 .popup {
-  padding: 16px;
+  padding: 14px 14px 12px;
 }
 
 .popup__hero {
   display: grid;
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: 6px;
+  margin-bottom: 10px;
 }
 
 .popup__brand {
@@ -93,8 +98,8 @@ body {
 }
 
 .panel {
-  margin-bottom: 10px;
-  padding: 14px;
+  margin-bottom: 8px;
+  padding: 13px;
   border: 1px solid var(--line);
   border-radius: 18px;
   background: var(--panel);
@@ -128,7 +133,7 @@ body {
 }
 
 .summary-line {
-  margin: 12px 0;
+  margin: 10px 0;
   color: var(--ink);
   font-size: 13px;
 }
@@ -171,8 +176,8 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 14px;
-  padding: 12px;
+  margin-top: 12px;
+  padding: 11px 12px;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: rgba(248, 251, 255, 0.8);
@@ -206,7 +211,7 @@ body {
 }
 
 .hint {
-  margin: 12px 0 0;
+  margin: 10px 0 0;
   font-size: 12px;
   line-height: 1.4;
 }
@@ -214,14 +219,14 @@ body {
 .actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 8px;
 }
 
 button {
   border: 0;
   border-radius: 14px;
-  min-height: 44px;
-  padding: 11px 12px;
+  min-height: 40px;
+  padding: 10px 12px;
   cursor: pointer;
   font: inherit;
   font-weight: 800;
@@ -273,7 +278,7 @@ button:disabled {
 }
 
 .message {
-  min-height: 18px;
-  margin: 10px 2px 0;
+  min-height: 16px;
+  margin: 8px 2px 0;
   font-size: 12px;
 }
